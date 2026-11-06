@@ -23,7 +23,7 @@ class CbomModule(BomModule):
 
     3-layer detection pipeline:
       Layer 1: Semgrep crypto rules (always)
-      Layer 2: cdxgen --include-crypto (always, if available)
+      Layer 2: cdxgen --include-crypto (with --allow-build-tools, if available)
       Layer 3: testssl.sh (only with --live-url)
     """
 
@@ -54,7 +54,7 @@ class CbomModule(BomModule):
         except Exception as e:
             logger.error("Layer 1 (Semgrep) failed: %s", e)
 
-        # Layer 2: cdxgen --include-crypto (always, if cdxgen available)
+        # Layer 2: cdxgen --include-crypto (with --allow-build-tools, if cdxgen available)
         logger.info("CBOM Layer 2: cdxgen --include-crypto")
         try:
             cdxgen_components = run_cdxgen_crypto(project_path, config)

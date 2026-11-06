@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from xbom.models import ScanConfig
-from xbom.utils.subprocess import find_tool, run_json
+from xbom.modules.sbom.cdxgen import generate_sbom
+from xbom.utils.subprocess import find_tool
 
 logger = logging.getLogger(__name__)
 
@@ -28,22 +29,24 @@ def run_cdxgen_crypto(project_path: Path, config: ScanConfig) -> list[dict[str, 
         logger.info("cdxgen not installed, skipping Layer 2")
         return []
 
+    if not config.allow_build_tools:
+        # Crypto analysis spawns cdxgen's external analyzers, which the cdxgen sandbox blocks
+        logger.info("cdxgen crypto scan requires --allow-build-tools, skipping Layer 2")
+        return []
+
     if not _has_supported_files(project_path):
         logger.info("No Java/Python files found, skipping cdxgen crypto scan")
         return []
 
-    cmd = [
-        cdxgen_path,
-        "--include-crypto",
-        "--spec-version", "1.6",
-        "-o", "-",  # stdout
-        str(project_path),
-    ]
-
-    data, error = run_json(cmd, cwd=project_path, timeout=300, verbose=config.verbose)
-
-    if error:
-        logger.error("cdxgen --include-crypto failed: %s", error)
+    try:
+        data = generate_sbom(
+            project_path,
+            include_crypto=True,
+            allow_build_tools=config.allow_build_tools,
+            verbose=config.verbose,
+        )
+    except RuntimeError as e:
+        logger.error("cdxgen --include-crypto failed: %s", e)
         return []
 
     if not data:

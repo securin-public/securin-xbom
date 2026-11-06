@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import re
+import shutil
 import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from xbom.config import get_token_for_provider
 from xbom.models import SourceInfo
@@ -66,20 +68,19 @@ class GitProvider(SourceProvider):
         org, repo = self._parse_url(target)
 
         clone_url = self._build_clone_url(target, token)
-        tmp_dir = tempfile.mkdtemp(prefix=f"xbom-{repo}-")
-        tmp_path = Path(tmp_dir)
+        tmp_path = Path(tempfile.mkdtemp(prefix="xbom-"))
+        repo_path = tmp_path / repo
 
         # Shallow clone for speed
         cmd = ["git", "clone", "--depth", "1"]
         if branch:
             cmd.extend(["--branch", branch])
-        cmd.extend([clone_url, str(tmp_path / repo)])
+        cmd.extend([clone_url, str(repo_path)])
 
         result = run(cmd, timeout=120)
         if not result.success:
+            shutil.rmtree(tmp_path, ignore_errors=True)
             raise RuntimeError(f"git clone failed: {result.stderr}")
-
-        repo_path = tmp_path / repo
 
         # Get commit SHA
         commit_result = run(["git", "rev-parse", "HEAD"], cwd=repo_path)
@@ -97,68 +98,72 @@ class GitProvider(SourceProvider):
             branch=actual_branch,
             commit_sha=commit_sha,
             url=target,
-            is_temp=True,
+            temp_dir=tmp_path,
         )
 
     def cleanup(self, info: SourceInfo) -> None:
-        if info.is_temp and info.local_path.exists():
-            import shutil
-
-            shutil.rmtree(info.local_path.parent, ignore_errors=True)
+        # Only ever remove the directory resolve() created, never a path derived from the URL
+        if info.temp_dir:
+            shutil.rmtree(info.temp_dir, ignore_errors=True)
 
     def _parse_url(self, url: str) -> tuple[str, str]:
         """Extract org and repo from a git URL."""
         # HTTPS: https://github.com/org/repo or https://github.com/org/repo.git
-        match = re.match(r"https?://[^/]+/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
-        if match:
-            return match.group(1), match.group(2)
         # SSH: git@github.com:org/repo.git
-        match = re.match(r"git@[^:]+:([^/]+)/([^/]+?)(?:\.git)?$", url)
-        if match:
-            return match.group(1), match.group(2)
+        for pattern in (r"https?://[^/]+/([^/]+)/([^/]+?)(?:\.git)?/?$", r"git@[^:]+:([^/]+)/([^/]+?)(?:\.git)?$"):
+            match = re.match(pattern, url)
+            if match:
+                org, repo = match.group(1), match.group(2)
+                # "." or ".." would make the clone path escape the temp dir
+                if {org, repo} & {".", ".."}:
+                    raise ValueError(f"Invalid repository path in git URL: {url}")
+                return org, repo
         raise ValueError(f"Cannot parse git URL: {url}")
 
     def _build_clone_url(self, url: str, token: str | None) -> str:
         """Inject token into HTTPS clone URL if available."""
-        if not token or not url.startswith("http"):
+        if not token or not url.startswith(("http://", "https://")):
             return url
+        parts = urlsplit(url)
+        if parts.scheme != "https":
+            raise ValueError(f"Refusing to send a git token over {parts.scheme}://, use an https:// URL")
         # https://github.com/... → https://x-access-token:TOKEN@github.com/...
-        return re.sub(r"(https?://)", rf"\1x-access-token:{token}@", url)
+        host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+        netloc = f"x-access-token:{quote(token, safe='')}@{host}"
+        if parts.port:
+            netloc += f":{parts.port}"
+        return urlunsplit(parts._replace(netloc=netloc))
 
 
 # Provider registry
 _PROVIDERS: dict[str, type[SourceProvider]] = {}
 
+# Hosts whose provider, and so which env token is sent, can be inferred from the URL.
+# Matched exactly: a substring match would send the token to look-alike hosts.
+_KNOWN_HOSTS = {
+    "github.com": "github",
+    "gitlab.com": "gitlab",
+    "bitbucket.org": "bitbucket",
+}
 
-def detect_provider(target: str) -> SourceProvider:
-    """Auto-detect the appropriate source provider for a target."""
-    # Local path
-    if target.startswith("/") or target.startswith("./") or target.startswith("~") or not target.startswith(("http", "git@")):
-        path = Path(target).expanduser()
-        if path.exists():
-            return LocalProvider()
+_PROVIDER_NAMES = {"github", "gitlab", "bitbucket", "git"}
 
-    # GitHub
-    if "github.com" in target:
-        return GitProvider("github")
 
-    # GitLab
-    if "gitlab" in target:
-        return GitProvider("gitlab")
+def detect_provider(target: str, provider: str | None = None) -> SourceProvider:
+    """Auto-detect the appropriate source provider for a target.
 
-    # Bitbucket
-    if "bitbucket.org" in target:
-        return GitProvider("bitbucket")
+    Args:
+        target: Local path or git URL.
+        provider: Explicit provider for URL targets (e.g. "gitlab" for a self-hosted
+            GitLab), which also selects the env token to use.
+    """
+    if not target.startswith(("http://", "https://", "git@")):
+        return LocalProvider()
 
-    # SSH URLs
-    if target.startswith("git@"):
-        if "github" in target:
-            return GitProvider("github")
-        if "gitlab" in target:
-            return GitProvider("gitlab")
-        if "bitbucket" in target:
-            return GitProvider("bitbucket")
-        return GitProvider("git")
+    if provider:
+        if provider not in _PROVIDER_NAMES:
+            raise ValueError(f"Unknown provider '{provider}'. Valid providers: {', '.join(sorted(_PROVIDER_NAMES))}")
+        return GitProvider(provider)
 
-    # Default: try as local path
-    return LocalProvider()
+    host = target[len("git@") :].split(":", 1)[0] if target.startswith("git@") else urlsplit(target).hostname
+    return GitProvider(_KNOWN_HOSTS.get((host or "").lower(), "git"))

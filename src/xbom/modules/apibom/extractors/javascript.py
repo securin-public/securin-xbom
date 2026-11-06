@@ -62,7 +62,7 @@ class ExpressExtractor(FrameworkExtractor):
                 break
 
         auth_patterns = _compile_auth("express")
-        file_has_auth = any(p.search(content) for p in auth_patterns)
+        auth_uses = _find_auth_uses(lines, auth_patterns)
 
         for route_cfg in cfg["routes"]:
             pattern = re.compile(route_cfg["pattern"])
@@ -82,8 +82,10 @@ class ExpressExtractor(FrameworkExtractor):
 
                 full_path = prefix + path if prefix else path
 
-                # Check for auth middleware in the route args
-                endpoint_auth = file_has_auth or _check_line_auth(line, auth_patterns)
+                # Auth middleware in the route args, or app.use(auth) registered before the route
+                endpoint_auth = _check_line_auth(line, auth_patterns) or any(
+                    use_line < i and path.startswith(use_prefix) for use_line, use_prefix in auth_uses
+                )
 
                 endpoints.append(
                     ApiEndpoint(
@@ -121,6 +123,23 @@ class ExpressExtractor(FrameworkExtractor):
 def _check_line_auth(line: str, auth_patterns: list[re.Pattern[str]]) -> bool:
     """Check if auth middleware appears in the route handler arguments."""
     return any(p.search(line) for p in auth_patterns)
+
+
+_USE_RE = re.compile(r"\.use\s*\(\s*(?:[\"'`]([^\"'`]*)[\"'`])?")
+
+
+def _find_auth_uses(lines: list[str], auth_patterns: list[re.Pattern[str]]) -> list[tuple[int, str]]:
+    """Find app.use()/router.use() calls that register auth middleware.
+
+    Express middleware only applies to routes registered after it, and a path
+    argument limits it to that prefix. Returns (line number, path prefix) pairs.
+    """
+    uses = []
+    for i, line in enumerate(lines, 1):
+        m = _USE_RE.search(line)
+        if m and _check_line_auth(line, auth_patterns):
+            uses.append((i, m.group(1) or ""))
+    return uses
 
 
 JS_EXTRACTORS: list[type[FrameworkExtractor]] = [

@@ -48,6 +48,75 @@ class TestFastAPIExtractor:
             assert ep.source_file == "main.py"
             assert ep.source_line > 0
 
+    def test_auth_is_per_route(self):
+        from xbom.modules.apibom.extractors.python import FastAPIExtractor
+
+        # One authenticated route must not mark its unauthenticated neighbours as authenticated
+        content = "\n".join([
+            "from fastapi import APIRouter, Depends",
+            "router = APIRouter(tags=['admin'])",
+            "",
+            "@router.get('/dashboard')",
+            "def dashboard(user=Depends(get_current_user)):",
+            "    return {}",
+            "",
+            "@router.get('/debug/config')",
+            "def debug_config():",
+            "    return {}",
+            "",
+            "@router.delete('/users/{user_id}')",
+            "async def delete_user(",
+            "    user_id: str,",
+            "    user=Depends(get_current_user),",
+            ") -> dict:",
+            "    return {}",
+        ])
+        endpoints = FastAPIExtractor().extract(Path("admin.py"), content, "admin.py")
+        auth_by_path = {ep.path: ep.auth_detected for ep in endpoints}
+        assert auth_by_path == {"/dashboard": True, "/debug/config": False, "/users/{user_id}": True}
+
+    def test_router_dependencies_cover_all_routes(self):
+        from xbom.modules.apibom.extractors.python import FastAPIExtractor
+
+        content = "\n".join([
+            "from fastapi import APIRouter, Depends",
+            "router = APIRouter(prefix='/admin', dependencies=[Depends(get_current_user)])",
+            "",
+            "@router.get('/stats')",
+            "def stats():",
+            "    return {}",
+        ])
+        endpoints = FastAPIExtractor().extract(Path("admin.py"), content, "admin.py")
+        assert [(ep.path, ep.auth_detected) for ep in endpoints] == [("/admin/stats", True)]
+
+    def test_sample_admin_debug_route_unauthenticated(self):
+        from xbom.modules.apibom.extractors.python import FastAPIExtractor
+
+        fixture = Path(__file__).parent.parent / "sample" / "app" / "admin.py"
+        endpoints = FastAPIExtractor().extract(fixture, fixture.read_text(), "app/admin.py")
+        unauthenticated = [ep.path for ep in endpoints if not ep.auth_detected]
+        assert unauthenticated == ["/debug/config"]
+
+
+class TestDjangoExtractor:
+    """Test Django route extraction."""
+
+    def test_auth_is_per_route(self):
+        from xbom.modules.apibom.extractors.python import DjangoExtractor
+
+        content = "\n".join([
+            "from django.urls import path",
+            "from django.contrib.auth.decorators import login_required",
+            "urlpatterns = [",
+            "    path('account/', login_required(views.account)),",
+            "    path('about/', views.about),",
+            "]",
+        ])
+        endpoints = DjangoExtractor().extract(Path("urls.py"), content, "urls.py")
+        auth_by_path = {ep.path: ep.auth_detected for ep in endpoints}
+        assert auth_by_path["/account/"] is True
+        assert auth_by_path["/about/"] is False
+
 
 class TestFlaskExtractor:
     """Test Flask route extraction."""
@@ -86,9 +155,12 @@ class TestFlaskExtractor:
         ext = FlaskExtractor()
 
         endpoints = ext.extract(fixture, content, "app.py")
-        # File has login_required, so auth should be detected for some endpoints
-        auth_endpoints = [ep for ep in endpoints if ep.auth_detected]
-        assert len(auth_endpoints) > 0
+        # Only the routes decorated with @login_required are authenticated
+        auth_by_path = {ep.path: ep.auth_detected for ep in endpoints}
+        assert auth_by_path["/api/v1/users"] is True
+        assert auth_by_path["/api/v1/users/<int:user_id>"] is True
+        assert auth_by_path["/api/v1/health"] is False
+        assert auth_by_path["/api/v1/admin/dashboard"] is False
 
 
 class TestExpressExtractor:
@@ -134,9 +206,28 @@ class TestExpressExtractor:
         ext = ExpressExtractor()
 
         endpoints = ext.extract(fixture, content, "app.js")
-        # File uses authMiddleware, so some endpoints should have auth
-        auth_eps = [ep for ep in endpoints if ep.auth_detected]
-        assert len(auth_eps) > 0
+        # Only routes that pass authMiddleware are authenticated
+        auth_by_route = {(ep.method, ep.path): ep.auth_detected for ep in endpoints}
+        assert auth_by_route[("GET", "/api/health")] is False
+        assert auth_by_route[("GET", "/api/users")] is True
+        assert auth_by_route[("DELETE", "/api/users/:id")] is True
+
+    def test_app_use_auth_applies_to_later_routes(self):
+        from xbom.modules.apibom.extractors.javascript import ExpressExtractor
+
+        content = "\n".join([
+            "const express = require('express');",
+            "const router = express.Router();",
+            "router.get('/health', (req, res) => res.send('ok'));",
+            "router.use('/admin', requireAuth);",
+            "router.get('/public', (req, res) => res.send('hi'));",
+            "router.get('/admin/stats', (req, res) => res.json({}));",
+            "router.use(requireAuth);",
+            "router.get('/me', (req, res) => res.json({}));",
+        ])
+        endpoints = ExpressExtractor().extract(Path("app.js"), content, "app.js")
+        auth_by_path = {ep.path: ep.auth_detected for ep in endpoints}
+        assert auth_by_path == {"/health": False, "/public": False, "/admin/stats": True, "/me": True}
 
 
 # ---------------------------------------------------------------------------

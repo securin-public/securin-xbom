@@ -49,7 +49,7 @@ Crypto usage in `app/auth.py`: JWT HS256, bcrypt, Fernet AES-128-CBC, SHA-256, H
 | Source | Endpoints | Auth | Risk |
 |--------|-----------|------|------|
 | `app/chat.py` | /chat, /documents | 100% | info |
-| `app/admin.py` | /dashboard, /debug/config, /password/reset, /users/{id} | 100% | medium (45) — sensitive_data_exposure + admin_endpoint_exposed |
+| `app/admin.py` | /dashboard, /debug/config, /password/reset, /users/{id} | 75% | medium (45) — sensitive_data_exposure + admin_endpoint_exposed |
 | `app/main.py` | /health, /api/v1/models | 0% | medium (30) — no_authentication |
 
 | External Dep | TLS | Risk |

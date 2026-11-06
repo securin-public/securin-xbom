@@ -52,11 +52,20 @@ def scan(
     bom_types: Annotated[Optional[str], typer.Option("--bom-types", help="Comma-separated BOM types: sbom,aibom,cbom,apibom")] = None,
     skip: Annotated[Optional[str], typer.Option("--skip", help="Skip BOM types: sbom,aibom,cbom,apibom")] = None,
     sbom_tool: Annotated[SbomTool, typer.Option("--sbom-tool", help="SBOM generation tool")] = SbomTool.CDXGEN,
+    allow_build_tools: Annotated[bool, typer.Option(
+        "--allow-build-tools",
+        help="Let cdxgen install dependencies and run the project's build tools (mvnw, gradlew, npm/pip). "
+        "More complete SBOM, but executes code from the scanned project — trusted projects only.",
+    )] = False,
     enrich: Annotated[bool, typer.Option("--enrich", help="Enable LLM agent enrichment")] = False,
     live_url: Annotated[Optional[str], typer.Option("--live-url", help="Live URL for TLS/API scanning")] = None,
     branch: Annotated[Optional[str], typer.Option("--branch", help="Git branch to scan")] = None,
     token: Annotated[Optional[str], typer.Option("--token", help="Git provider auth token")] = None,
-    provider: Annotated[Optional[str], typer.Option("--provider", help="Force git provider")] = None,
+    provider: Annotated[Optional[str], typer.Option(
+        "--provider",
+        help="Git provider for a URL target: github, gitlab, bitbucket, git. Needed for self-hosted servers "
+        "to use the provider's XBOM_*_TOKEN env var.",
+    )] = None,
     verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output")] = False,
 ) -> None:
     """Scan a project and generate BOMs."""
@@ -74,6 +83,7 @@ def scan(
         output_dir=output_dir or get_default_output_dir(),
         bom_types=final_types,
         sbom_tool=sbom_tool,
+        allow_build_tools=allow_build_tools,
         enrich=enrich,
         live_url=live_url,
         branch=branch,
@@ -105,8 +115,8 @@ def scan(
 
     # Resolve source
     console.print("\n[bold]Resolving source...[/bold]")
-    source_provider = detect_provider(target)
     try:
+        source_provider = detect_provider(target, provider)
         source_info = source_provider.resolve(target, branch=branch, token=token)
         console.print(f"  Provider: {source_info.provider}")
         console.print(f"  Path: {source_info.local_path}")
