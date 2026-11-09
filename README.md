@@ -45,7 +45,7 @@ xbom doctor                   # check what's installed
 | Dependency | Required? | Purpose | Install |
 |-----------|-----------|---------|---------|
 | **Python >= 3.11** | Yes | Runtime | [python.org](https://python.org) |
-| **Node.js >= 18** | Yes | cdxgen + MCP servers | `brew install node` / [nodejs.org](https://nodejs.org) |
+| **Node.js >= 20** | Yes | cdxgen (run sandboxed) + MCP servers | `brew install node` / [nodejs.org](https://nodejs.org) |
 | **git** | Yes | Remote repo scanning | Pre-installed on most systems |
 
 ### Step 1: Python Environment
@@ -178,11 +178,14 @@ Requires: `pip install -e ".[agent,codegraph]"` + API key + Docker with FalkorDB
 ```bash
 export XBOM_ENRICHMENT_PROVIDER=openai
 xbom scan /path/to/project --enrich -v
+
+# Trusted project: also run CodeGraph (Layer 4)
+xbom scan /path/to/project --enrich --allow-build-tools -v
 ```
 
 This activates:
 - **AI-BOM Layer 3**: Strands Agent classifies unknown packages via ecosyste.ms metadata
-- **AI-BOM Layer 4**: CodeGraph indexes the project into FalkorDB, then an agent explores the graph via MCP to discover custom agents, tools, and architectural patterns
+- **AI-BOM Layer 4**: CodeGraph indexes the project into FalkorDB, then an agent explores the graph via MCP to discover custom agents, tools, and architectural patterns. Indexing installs the project's dependencies (`pip`/`poetry install`) and starts language servers, so it only runs with `--allow-build-tools`; it works on a temporary copy, leaving your checkout untouched.
 
 ### Remote Repos
 
@@ -195,7 +198,12 @@ xbom scan https://github.com/org/repo --token ghp_xxx --branch main
 
 # GitLab / Bitbucket
 xbom scan https://gitlab.com/org/repo --token glpat-xxx
+
+# Self-hosted server: name the provider so its XBOM_*_TOKEN env var is used
+xbom scan https://git.example.com/org/repo --provider gitlab
 ```
+
+Env tokens are only sent to github.com, gitlab.com and bitbucket.org (or the host you name with `--provider`), and only over `https://`.
 
 ### Live TLS Scanning
 
@@ -213,7 +221,7 @@ A bundled sample project exercises all four modules:
 xbom scan sample/ --skip sbom -v -o /tmp/xbom-sample
 
 # Full enriched scan (+ LLM agent + CodeGraph)
-xbom scan sample/ --enrich -v -o /tmp/xbom-sample-full
+xbom scan sample/ --enrich --allow-build-tools -v -o /tmp/xbom-sample-full
 ```
 
 The sample project is a FastAPI AI chat service with OpenAI, LangChain, Strands Agents, MCP tools, JWT/bcrypt/Fernet crypto, and outbound HTTP calls to Slack/Stripe/Sentry.
@@ -257,6 +265,8 @@ Generates a standard Software BOM using cdxgen (default) or Trivy. Runs first â€
 
 **Requires:** Node.js + cdxgen (`npm install -g @cyclonedx/cdxgen`)
 
+cdxgen runs under Node's permission model with child processes blocked, so a scan never runs the project's package managers or build wrappers (`npm install`, `pip install`, `mvnw`, `gradlew`); the SBOM is built from manifests and lock files. For a more complete SBOM of a project you trust, pass `--allow-build-tools`.
+
 ### AI-BOM Module
 
 Detects AI/ML components through a 4-layer pipeline:
@@ -266,7 +276,7 @@ Detects AI/ML components through a 4-layer pipeline:
 | 1. Pattern scanning | nothing | 10 regex scanners (imports, model names, API keys, Docker images, etc.) across Python/JS/Java/Go |
 | 2. Catalog cross-ref | SBOM output | Matches SBOM packages against 200+ known AI/ML package catalog |
 | 3. ecosyste.ms + Agent | `--enrich` + API key + `pip install xbom[agent]` | Bulk metadata lookup + LLM classification of unknown packages |
-| 4. CodeGraph | `--enrich` + Docker + FalkorDB + npx + `pip install xbom[codegraph]` | Autonomous graph exploration to discover custom agents, tools, MCP wrappers |
+| 4. CodeGraph | `--enrich` + `--allow-build-tools` + Docker + FalkorDB + npx + `pip install xbom[codegraph]` | Autonomous graph exploration to discover custom agents, tools, MCP wrappers |
 
 Post-processing: shadow AI detection (imports not in SBOM) and risk scoring.
 
@@ -277,7 +287,7 @@ Detects cryptographic assets through a 3-layer pipeline:
 | Layer | Requires | What it does |
 |-------|----------|--------------|
 | 1. Semgrep | semgrep | Custom crypto rules for Python, Java, JS/TS, Go, C/C++ |
-| 2. cdxgen crypto | cdxgen | cdxgen `--include-crypto` for Java and Python |
+| 2. cdxgen crypto | cdxgen + `--allow-build-tools` | cdxgen `--include-crypto` for Java and Python |
 | 3. testssl.sh | `--live-url` + testssl.sh | Live TLS endpoint scanning (cipher suites, certs, protocols) |
 
 Post-processing: post-quantum safety classification and crypto risk scoring.
@@ -354,7 +364,7 @@ source .venv/bin/activate
 pip install -e ".[all]"
 
 # Run tests
-pytest                                      # 81 tests
+pytest                                      # 116 tests
 pytest tests/test_apibom.py -v              # Single module
 
 # Lint

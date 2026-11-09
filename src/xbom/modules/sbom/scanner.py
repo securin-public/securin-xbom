@@ -42,7 +42,9 @@ class SbomModule(BomModule):
                 "Or use --sbom-tool trivy as an alternative.",
             )
         try:
-            return cdxgen.generate_sbom(project_path, verbose=config.verbose)
+            return cdxgen.generate_sbom(
+                project_path, allow_build_tools=config.allow_build_tools, verbose=config.verbose
+            )
         except RuntimeError as e:
             raise ScanError(self.name, str(e)) from e
 

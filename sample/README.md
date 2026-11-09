@@ -27,7 +27,7 @@ A small AI-powered document Q&A service designed to exercise all four xBOM modul
 xbom scan sample/ -v -o /tmp/xbom-sample
 
 # With LLM enrichment (needs API key configured)
-xbom scan sample/ --enrich -v -o /tmp/xbom-sample-full
+xbom scan sample/ --enrich --allow-build-tools -v -o /tmp/xbom-sample-full
 ```
 
 ## Expected results
@@ -49,7 +49,7 @@ Crypto usage in `app/auth.py`: JWT HS256, bcrypt, Fernet AES-128-CBC, SHA-256, H
 | Source | Endpoints | Auth | Risk |
 |--------|-----------|------|------|
 | `app/chat.py` | /chat, /documents | 100% | info |
-| `app/admin.py` | /dashboard, /debug/config, /password/reset, /users/{id} | 100% | medium (45) — sensitive_data_exposure + admin_endpoint_exposed |
+| `app/admin.py` | /dashboard, /debug/config, /password/reset, /users/{id} | 75% | medium (45) — sensitive_data_exposure + admin_endpoint_exposed |
 | `app/main.py` | /health, /api/v1/models | 0% | medium (30) — no_authentication |
 
 | External Dep | TLS | Risk |

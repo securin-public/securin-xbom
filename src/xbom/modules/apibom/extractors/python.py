@@ -61,9 +61,9 @@ class FastAPIExtractor(FrameworkExtractor):
                 prefix = m.group(1).rstrip("/")
                 break
 
-        # Check for auth in file (file-level)
+        # Auth in FastAPI(dependencies=[...]) / APIRouter(dependencies=[...]) covers every route
         auth_patterns = _compile_auth("fastapi")
-        file_has_auth = any(p.search(content) for p in auth_patterns)
+        file_has_auth = _has_app_level_auth(content, auth_patterns)
 
         # Extract routes
         for route_cfg in cfg["routes"]:
@@ -84,8 +84,8 @@ class FastAPIExtractor(FrameworkExtractor):
 
                 full_path = prefix + path if prefix else path
 
-                # Check for auth on this specific endpoint (look at surrounding lines)
-                endpoint_auth = file_has_auth or _check_nearby_auth(lines, i - 1, auth_patterns)
+                # Check for auth on this specific endpoint (its decorators and signature)
+                endpoint_auth = file_has_auth or _route_has_auth(lines, i - 1, auth_patterns)
 
                 endpoints.append(
                     ApiEndpoint(
@@ -149,7 +149,6 @@ class FlaskExtractor(FrameworkExtractor):
                 break
 
         auth_patterns = _compile_auth("flask")
-        file_has_auth = any(p.search(content) for p in auth_patterns)
 
         for route_cfg in cfg["routes"]:
             pattern = re.compile(route_cfg["pattern"])
@@ -175,7 +174,7 @@ class FlaskExtractor(FrameworkExtractor):
                 else:
                     methods = [default_method]
 
-                endpoint_auth = file_has_auth or _check_nearby_auth(lines, i - 1, auth_patterns)
+                endpoint_auth = _route_has_auth(lines, i - 1, auth_patterns)
 
                 for method in methods:
                     endpoints.append(
@@ -214,7 +213,6 @@ class DjangoExtractor(FrameworkExtractor):
         lines = content.splitlines()
 
         auth_patterns = _compile_auth("django")
-        file_has_auth = any(p.search(content) for p in auth_patterns)
 
         for route_cfg in cfg["routes"]:
             pattern = re.compile(route_cfg["pattern"])
@@ -241,6 +239,8 @@ class DjangoExtractor(FrameworkExtractor):
                 if path and not path.startswith("/"):
                     path = "/" + path
 
+                endpoint_auth = _route_has_auth(lines, i - 1, auth_patterns)
+
                 for method in methods:
                     endpoints.append(
                         ApiEndpoint(
@@ -250,7 +250,7 @@ class DjangoExtractor(FrameworkExtractor):
                             source_file=rel_path,
                             source_line=i,
                             category="internal-endpoint",
-                            auth_detected=file_has_auth,
+                            auth_detected=endpoint_auth,
                         )
                     )
 
@@ -271,14 +271,69 @@ def _parse_method_list(raw: str) -> list[str]:
     return [m.strip() for m in cleaned.split(",") if m.strip()]
 
 
-def _check_nearby_auth(lines: list[str], line_idx: int, auth_patterns: list[re.Pattern[str]]) -> bool:
-    """Check for auth decorators/middleware in lines immediately above the route."""
-    start = max(0, line_idx - 5)
-    for i in range(start, line_idx):
-        for p in auth_patterns:
-            if p.search(lines[i]):
-                return True
+_DEF_RE = re.compile(r"\s*(?:async\s+)?def\s")
+_APP_CALL_RE = re.compile(r"\b(?:FastAPI|APIRouter)\s*\(")
+_MAX_BLOCK_LINES = 50
+
+
+def _route_has_auth(lines: list[str], line_idx: int, auth_patterns: list[re.Pattern[str]]) -> bool:
+    """Check for auth on the route defined at lines[line_idx]."""
+    block = _route_block(lines, line_idx)
+    return any(p.search(block) for p in auth_patterns)
+
+
+def _route_block(lines: list[str], line_idx: int) -> str:
+    """Return the source that determines a single route's auth.
+
+    For a decorator, that's the decorator stack plus the decorated function's
+    signature (FastAPI dependencies live in the signature, Flask/DRF auth in the
+    decorators). For anything else, e.g. Django's path("x/", login_required(view)),
+    it's the call starting on that line.
+    """
+    limit = min(len(lines), line_idx + _MAX_BLOCK_LINES)
+
+    if not lines[line_idx].lstrip().startswith("@"):
+        end, depth = line_idx, 0
+        while end < limit:
+            depth += lines[end].count("(") - lines[end].count(")")
+            if depth <= 0:
+                break
+            end += 1
+        return "\n".join(lines[line_idx : end + 1])
+
+    start = line_idx
+    while start > 0 and lines[start - 1].lstrip().startswith("@"):
+        start -= 1
+
+    end = line_idx
+    while end < limit and not _DEF_RE.match(lines[end]):
+        end += 1
+    # Extend to the line that closes the signature
+    while end < limit and not lines[end].split("#", 1)[0].rstrip().endswith(":"):
+        end += 1
+    return "\n".join(lines[start : end + 1])
+
+
+def _has_app_level_auth(content: str, auth_patterns: list[re.Pattern[str]]) -> bool:
+    """Check for auth in FastAPI(...)/APIRouter(...) dependencies, which apply to all their routes."""
+    for m in _APP_CALL_RE.finditer(content):
+        args = _call_args(content, m.end())
+        if "dependencies" in args and any(p.search(args) for p in auth_patterns):
+            return True
     return False
+
+
+def _call_args(content: str, start: int) -> str:
+    """Return a call's argument text, from just after its "(" to the matching ")"."""
+    depth = 1
+    for i in range(start, len(content)):
+        if content[i] == "(":
+            depth += 1
+        elif content[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return content[start:i]
+    return content[start:]
 
 
 # All Python extractors

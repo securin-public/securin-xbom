@@ -7,7 +7,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import socket
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any
@@ -49,6 +51,10 @@ def is_falkordb_available(
 
 # ── Project indexing ───────────────────────────────────────────────────
 
+# Not copied into the indexing workspace. The indexer accepts an ignore list but doesn't
+# apply it, so leaving these out of the copy is what actually keeps them out of the graph.
+_INDEX_IGNORE = [".git", "node_modules", "__pycache__", ".venv", "venv", "build", "dist", "tests", ".tox"]
+
 
 def index_project(project_path: Path) -> str:
     """Index a project with FalkorDB code-graph.
@@ -69,11 +75,7 @@ def index_project(project_path: Path) -> str:
     analyzer = SourceAnalyzer()
 
     logger.info("Indexing project %s into graph %s...", project_path, graph_name)
-    analyzer.analyze_local_folder(
-        str(project_path),
-        graph,
-        ignore=[".git", "node_modules", "__pycache__", ".venv", "venv", "build", "dist", "tests", ".tox"],
-    )
+    analyzer.analyze_local_folder(str(project_path), graph, ignore=_INDEX_IGNORE)
 
     # Log stats
     try:
@@ -98,21 +100,51 @@ def index_project(project_path: Path) -> str:
 
 def analyze_with_codegraph(project_path: Path, config: ScanConfig) -> dict[str, Any]:
     """Full CodeGraph analysis:
-    1. Index project → FalkorDB graph
+    1. Copy the project to a temp workspace and index the copy → FalkorDB graph
+       (the indexer creates a venv/ and installs dependencies inside the folder it indexes)
     2. Connect Strands Agent to official FalkorDB MCP Server (@falkordb/mcpserver)
     3. Agent runs Cypher discovery queries via MCP tools
-    4. Parse structured JSON output
-    5. Cleanup graph
+    4. Parse structured JSON output, mapping file paths back to the project
+    5. Cleanup graph and workspace
     """
-    graph_name = index_project(project_path)
+    with tempfile.TemporaryDirectory(prefix="xbom-codegraph-", ignore_cleanup_errors=True) as tmp:
+        # Keep the project's directory name so the graph name stays xbom_<project>
+        work_path = Path(tmp) / project_path.name
+        shutil.copytree(project_path, work_path, symlinks=True, ignore=shutil.ignore_patterns(*_INDEX_IGNORE))
 
-    try:
-        result = _run_codegraph_agent(graph_name, config)
-    finally:
+        graph_name = index_project(work_path)
+
         try:
-            cleanup(graph_name)
-        except Exception as e:
-            logger.debug("Graph cleanup failed: %s", e)
+            result = _run_codegraph_agent(graph_name, config)
+        finally:
+            try:
+                cleanup(graph_name)
+            except Exception as e:
+                logger.debug("Graph cleanup failed: %s", e)
+
+        return _remap_paths(result, work_path, project_path)
+
+
+def _remap_paths(result: dict[str, Any], work_path: Path, project_path: Path) -> dict[str, Any]:
+    """Point file paths reported from the indexed copy back at the original project."""
+    # The indexer resolves paths, e.g. /var/... becomes /private/var/... on macOS
+    prefixes = {str(work_path), str(work_path.resolve())}
+
+    def remap(value: Any) -> Any:
+        if isinstance(value, str):
+            for prefix in prefixes:
+                if value.startswith(prefix):
+                    return str(project_path) + value[len(prefix) :]
+        return value
+
+    for key in ("components", "relationships"):
+        for item in result.get(key) or []:
+            if isinstance(item, dict) and "file_path" in item:
+                item["file_path"] = remap(item["file_path"])
+
+    arch = result.get("architecture")
+    if isinstance(arch, dict) and isinstance(arch.get("entry_points"), list):
+        arch["entry_points"] = [remap(e) for e in arch["entry_points"]]
 
     return result
 
