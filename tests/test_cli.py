@@ -7,6 +7,30 @@ from xbom.cli import app
 runner = CliRunner()
 
 
+def test_bare_xbom_shows_launch_screen():
+    result = runner.invoke(app, [])
+    assert result.exit_code == 0
+    assert "xBOM v" in result.output and "by Securin" in result.output
+    assert "Quick start" in result.output
+    for command in ("scan", "doctor", "validate", "version"):
+        assert command in result.output
+
+
+def test_short_help_flag():
+    result = runner.invoke(app, ["-h"])
+    assert result.exit_code == 0
+    assert "Usage" in result.output
+    assert "by Securin" in result.output
+
+
+def test_scan_help_groups_options_and_shows_examples():
+    result = runner.invoke(app, ["scan", "--help"])
+    assert result.exit_code == 0
+    for panel in ("What to scan", "Enrichment and trust", "Remote repositories", "Output", "Examples"):
+        assert panel in result.output
+    assert "xbom scan https://github.com/org/repo --branch main" in result.output
+
+
 def test_version():
     result = runner.invoke(app, ["version"])
     assert result.exit_code == 0

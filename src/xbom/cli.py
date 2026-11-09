@@ -7,20 +7,75 @@ from typing import Annotated, Optional
 
 import typer
 from rich.console import Console
+from rich.padding import Padding
 from rich.table import Table
+from typer.core import TyperCommand, TyperGroup
 
 from xbom import __version__
+from xbom.branding import REPO_URL, header, print_launch_screen, section
 from xbom.config import get_default_output_dir
 from xbom.models import BomType, SbomTool, ScanConfig
 from xbom.source.provider import detect_provider
 from xbom.utils.subprocess import check_tool_version, find_tool
 
+
+class _BrandedGroup(TyperGroup):
+    """Top-level command group that puts the Securin logo above `xbom --help`."""
+
+    def format_help(self, ctx, formatter):
+        out = Console()
+        for renderable in header(out):
+            out.print(renderable)
+        super().format_help(ctx, formatter)
+
+
 app = typer.Typer(
     name="xbom",
-    help="Generate unified SBOM, AI-BOM, CBOM, and API-BOM in CycloneDX 1.6 JSON.",
-    no_args_is_help=True,
+    cls=_BrandedGroup,
+    epilog=f"Run 'xbom <command> --help' for a command's options. Docs: {REPO_URL}",
+    context_settings={"help_option_names": ["-h", "--help"]},
+    rich_markup_mode="rich",
 )
 console = Console(stderr=True)
+
+# Help panels that group the scan options
+_PANEL_SCOPE = "What to scan"
+_PANEL_REMOTE = "Remote repositories"
+_PANEL_TRUST = "Enrichment and trust"
+_PANEL_OUTPUT = "Output"
+
+_SCAN_EXAMPLES = [
+    ("xbom scan .", "Scan the current project"),
+    ("xbom scan ./app --bom-types aibom,apibom", "Only the AI-BOM and API-BOM"),
+    ("xbom scan https://github.com/org/repo --branch main", "Scan a branch of a remote repository"),
+    ("xbom scan . --enrich --allow-build-tools", "Everything, for a project you trust"),
+    ("xbom scan . --live-url https://api.example.com", "Also check a live endpoint's TLS"),
+]
+
+
+class _ScanCommand(TyperCommand):
+    """`xbom scan` with usage examples after its options."""
+
+    def format_help(self, ctx, formatter):
+        super().format_help(ctx, formatter)
+        if formatter.getvalue():
+            # Rich is turned off, so help is buffered as plain text: append the examples to it
+            with formatter.section("Examples"):
+                formatter.write_dl(_SCAN_EXAMPLES)
+        else:
+            Console().print(Padding(section("Examples", _SCAN_EXAMPLES), (1, 0, 1, 1)))
+
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context) -> None:
+    # Bare `xbom` shows the launch screen instead of an error or the raw option list
+    if ctx.invoked_subcommand is None:
+        group = ctx.command
+        commands = [
+            (name, group.get_command(ctx, name).get_short_help_str(limit=70).rstrip("."))
+            for name in group.list_commands(ctx)
+        ]
+        print_launch_screen(Console(), commands)
 
 
 def _parse_bom_types(value: str | None) -> list[BomType]:
@@ -45,31 +100,79 @@ def _parse_skip(value: str | None) -> list[BomType]:
     return _parse_bom_types(value)
 
 
-@app.command()
+@app.command(cls=_ScanCommand)
 def scan(
-    target: Annotated[str, typer.Argument(help="Path or URL to scan")],
-    output_dir: Annotated[Optional[Path], typer.Option("--output-dir", "-o", help="Output directory")] = None,
-    bom_types: Annotated[Optional[str], typer.Option("--bom-types", help="Comma-separated BOM types: sbom,aibom,cbom,apibom")] = None,
-    skip: Annotated[Optional[str], typer.Option("--skip", help="Skip BOM types: sbom,aibom,cbom,apibom")] = None,
-    sbom_tool: Annotated[SbomTool, typer.Option("--sbom-tool", help="SBOM generation tool")] = SbomTool.CDXGEN,
+    target: Annotated[str, typer.Argument(
+        help="Local folder or git URL (https:// or git@) to scan.", show_default=False,
+    )],
+    bom_types: Annotated[Optional[str], typer.Option(
+        "--bom-types",
+        help="BOMs to generate, comma-separated: sbom, aibom, cbom, apibom. Defaults to all four.",
+        rich_help_panel=_PANEL_SCOPE,
+        show_default=False,
+    )] = None,
+    skip: Annotated[Optional[str], typer.Option(
+        "--skip",
+        help="BOMs to leave out, comma-separated. Without an SBOM, the AI-BOM can't cross-check packages.",
+        rich_help_panel=_PANEL_SCOPE,
+        show_default=False,
+    )] = None,
+    sbom_tool: Annotated[SbomTool, typer.Option(
+        "--sbom-tool", help="Tool that generates the SBOM.", rich_help_panel=_PANEL_SCOPE,
+    )] = SbomTool.CDXGEN,
+    live_url: Annotated[Optional[str], typer.Option(
+        "--live-url",
+        help="Also check the TLS setup of this https:// endpoint with testssl.sh (adds to the CBOM).",
+        rich_help_panel=_PANEL_SCOPE,
+        show_default=False,
+    )] = None,
+    enrich: Annotated[bool, typer.Option(
+        "--enrich",
+        help="Classify unknown packages with an LLM agent. Needs an API key and the 'agent' extra; see README.",
+        rich_help_panel=_PANEL_TRUST,
+    )] = False,
     allow_build_tools: Annotated[bool, typer.Option(
         "--allow-build-tools",
         help="Let cdxgen and the CodeGraph indexer install dependencies and run the project's build tools "
         "(mvnw, gradlew, npm/pip). Enables CodeGraph and cdxgen crypto analysis and gives a more complete SBOM, "
         "but executes code from the scanned project — trusted projects only.",
+        rich_help_panel=_PANEL_TRUST,
     )] = False,
-    enrich: Annotated[bool, typer.Option("--enrich", help="Enable LLM agent enrichment")] = False,
-    live_url: Annotated[Optional[str], typer.Option("--live-url", help="Live URL for TLS/API scanning")] = None,
-    branch: Annotated[Optional[str], typer.Option("--branch", help="Git branch to scan")] = None,
-    token: Annotated[Optional[str], typer.Option("--token", help="Git provider auth token")] = None,
+    branch: Annotated[Optional[str], typer.Option(
+        "--branch",
+        help="Branch to clone. Defaults to the repository's default branch.",
+        rich_help_panel=_PANEL_REMOTE,
+        show_default=False,
+    )] = None,
+    token: Annotated[Optional[str], typer.Option(
+        "--token",
+        help="Token for a private repository. Prefer XBOM_GITHUB_TOKEN, XBOM_GITLAB_TOKEN or XBOM_BITBUCKET_TOKEN, "
+        "which stay out of your shell history.",
+        rich_help_panel=_PANEL_REMOTE,
+        show_default=False,
+    )] = None,
     provider: Annotated[Optional[str], typer.Option(
         "--provider",
         help="Git provider for a URL target: github, gitlab, bitbucket, git. Needed for self-hosted servers "
         "to use the provider's XBOM_*_TOKEN env var.",
+        rich_help_panel=_PANEL_REMOTE,
+        show_default=False,
     )] = None,
-    verbose: Annotated[bool, typer.Option("--verbose", "-v", help="Verbose output")] = False,
+    output_dir: Annotated[Optional[Path], typer.Option(
+        "--output-dir", "-o",
+        help="Where to write the BOMs. Defaults to ./xbom-output, or $XBOM_OUTPUT_DIR if set.",
+        rich_help_panel=_PANEL_OUTPUT,
+        show_default=False,
+    )] = None,
+    verbose: Annotated[bool, typer.Option(
+        "--verbose", "-v", help="Show detailed progress from each scanner.", rich_help_panel=_PANEL_OUTPUT,
+    )] = False,
 ) -> None:
-    """Scan a project and generate BOMs."""
+    """Scan a project and write BOMs to ./xbom-output.
+
+    Generates an SBOM, AI-BOM, CBOM and API-BOM for a local folder or a git repository,
+    writes each one, and merges them into xbom-composite.cdx.json.
+    """
     import time
 
     from xbom.runner import run_scan
@@ -143,7 +246,7 @@ def scan(
 
 @app.command()
 def doctor() -> None:
-    """Check that all required external tools are installed."""
+    """Check which external tools and services are installed and running."""
     import socket
 
     console.print(f"[bold]xBOM v{__version__} — Dependency Check[/bold]\n")
@@ -238,7 +341,10 @@ def doctor() -> None:
 def validate(
     file: Annotated[Path, typer.Argument(help="Path to CycloneDX JSON file")],
 ) -> None:
-    """Validate a CycloneDX JSON BOM file."""
+    """Check that a file is a CycloneDX BOM.
+
+    Checks the format, spec version and serial number, then counts components and services.
+    """
     from xbom.utils.cyclonedx import load_bom_json, validate_bom
 
     if not file.exists():
@@ -268,7 +374,7 @@ def validate(
 
 @app.command()
 def version() -> None:
-    """Show xBOM version."""
+    """Show the xBOM version."""
     console.print(f"xbom {__version__}")
 
 

@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/securin-logo-on-dark.svg">
+    <img alt="Securin" src="docs/assets/securin-logo-on-light.svg" width="320">
+  </picture>
+</p>
+
 # xBOM
 
 Generate unified **SBOM**, **AI-BOM**, **CBOM**, and **API-BOM** in a single CycloneDX 1.6 JSON output.
@@ -34,6 +41,7 @@ xBOM scans a codebase and produces four Bills of Materials covering software pac
 
 ```bash
 pip install -e "."
+xbom                          # what xBOM does, with a quick start
 xbom scan /path/to/project
 xbom doctor                   # check what's installed
 ```
