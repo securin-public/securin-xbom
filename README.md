@@ -11,6 +11,10 @@ Generate unified **SBOM**, **AI-BOM**, **CBOM**, and **API-BOM** in a single Cyc
 
 xBOM scans a codebase and produces four Bills of Materials covering software packages, AI/ML components, cryptographic assets, and API endpoints — then merges them into one composite BOM.
 
+<p align="center">
+  <img alt="Running xbom shows the Securin logo, a quick start and the available commands" src="docs/assets/xbom-terminal.png" width="800">
+</p>
+
 ## Features
 
 - **SBOM** — Software Bill of Materials via [cdxgen](https://github.com/CycloneDX/cdxgen) or [Trivy](https://github.com/aquasecurity/trivy)
