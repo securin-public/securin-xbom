@@ -28,7 +28,7 @@ class ScanConfig:
     output_dir: Path = Path("./xbom-output")
     bom_types: list[BomType] = field(default_factory=lambda: list(BomType))
     sbom_tool: SbomTool = SbomTool.CDXGEN
-    allow_build_tools: bool = False  # Let cdxgen run the project's package managers/build scripts
+    allow_build_tools: bool = False  # Let cdxgen/CodeGraph run the project's package managers/build scripts
     enrich: bool = False
     live_url: str | None = None
     branch: str | None = None

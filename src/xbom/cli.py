@@ -54,8 +54,9 @@ def scan(
     sbom_tool: Annotated[SbomTool, typer.Option("--sbom-tool", help="SBOM generation tool")] = SbomTool.CDXGEN,
     allow_build_tools: Annotated[bool, typer.Option(
         "--allow-build-tools",
-        help="Let cdxgen install dependencies and run the project's build tools (mvnw, gradlew, npm/pip). "
-        "More complete SBOM, but executes code from the scanned project — trusted projects only.",
+        help="Let cdxgen and the CodeGraph indexer install dependencies and run the project's build tools "
+        "(mvnw, gradlew, npm/pip). Enables CodeGraph and cdxgen crypto analysis and gives a more complete SBOM, "
+        "but executes code from the scanned project — trusted projects only.",
     )] = False,
     enrich: Annotated[bool, typer.Option("--enrich", help="Enable LLM agent enrichment")] = False,
     live_url: Annotated[Optional[str], typer.Option("--live-url", help="Live URL for TLS/API scanning")] = None,

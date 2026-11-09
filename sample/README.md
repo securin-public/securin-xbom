@@ -27,7 +27,7 @@ A small AI-powered document Q&A service designed to exercise all four xBOM modul
 xbom scan sample/ -v -o /tmp/xbom-sample
 
 # With LLM enrichment (needs API key configured)
-xbom scan sample/ --enrich -v -o /tmp/xbom-sample-full
+xbom scan sample/ --enrich --allow-build-tools -v -o /tmp/xbom-sample-full
 ```
 
 ## Expected results

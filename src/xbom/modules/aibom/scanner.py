@@ -77,7 +77,7 @@ class AibomModule(BomModule):
                 except Exception as e:
                     logger.warning("  ✗ ecosyste.ms heuristic failed: %s", e)
 
-        # ── Layer 4: CodeGraph analysis (--enrich + FalkorDB) ──
+        # ── Layer 4: CodeGraph analysis (--enrich + --allow-build-tools + FalkorDB) ──
         if config.enrich:
             logger.info("═══ Layer 4: CodeGraph analysis ═══")
             try:
@@ -355,6 +355,15 @@ class AibomModule(BomModule):
         """Use FalkorDB code-graph + MCP + Strands Agent to find custom AI components
         and relationships via code graph analysis."""
         from xbom.modules.aibom.codegraph import analyze_with_codegraph, is_falkordb_available
+
+        if not config.allow_build_tools:
+            # The code-graph indexer pip/poetry-installs the project's dependencies and starts
+            # language servers that import its builds, which runs code from the scanned project
+            logger.warning(
+                "Skipping CodeGraph analysis: indexing installs the project's dependencies. "
+                "Pass --allow-build-tools to enable it for a trusted project."
+            )
+            return 0
 
         if not is_falkordb_available():
             logger.info("FalkorDB not available at localhost:6379, skipping CodeGraph analysis. "

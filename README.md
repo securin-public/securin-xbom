@@ -178,11 +178,14 @@ Requires: `pip install -e ".[agent,codegraph]"` + API key + Docker with FalkorDB
 ```bash
 export XBOM_ENRICHMENT_PROVIDER=openai
 xbom scan /path/to/project --enrich -v
+
+# Trusted project: also run CodeGraph (Layer 4)
+xbom scan /path/to/project --enrich --allow-build-tools -v
 ```
 
 This activates:
 - **AI-BOM Layer 3**: Strands Agent classifies unknown packages via ecosyste.ms metadata
-- **AI-BOM Layer 4**: CodeGraph indexes the project into FalkorDB, then an agent explores the graph via MCP to discover custom agents, tools, and architectural patterns
+- **AI-BOM Layer 4**: CodeGraph indexes the project into FalkorDB, then an agent explores the graph via MCP to discover custom agents, tools, and architectural patterns. Indexing installs the project's dependencies (`pip`/`poetry install`) and starts language servers, so it only runs with `--allow-build-tools`; it works on a temporary copy, leaving your checkout untouched.
 
 ### Remote Repos
 
@@ -218,7 +221,7 @@ A bundled sample project exercises all four modules:
 xbom scan sample/ --skip sbom -v -o /tmp/xbom-sample
 
 # Full enriched scan (+ LLM agent + CodeGraph)
-xbom scan sample/ --enrich -v -o /tmp/xbom-sample-full
+xbom scan sample/ --enrich --allow-build-tools -v -o /tmp/xbom-sample-full
 ```
 
 The sample project is a FastAPI AI chat service with OpenAI, LangChain, Strands Agents, MCP tools, JWT/bcrypt/Fernet crypto, and outbound HTTP calls to Slack/Stripe/Sentry.
@@ -273,7 +276,7 @@ Detects AI/ML components through a 4-layer pipeline:
 | 1. Pattern scanning | nothing | 10 regex scanners (imports, model names, API keys, Docker images, etc.) across Python/JS/Java/Go |
 | 2. Catalog cross-ref | SBOM output | Matches SBOM packages against 200+ known AI/ML package catalog |
 | 3. ecosyste.ms + Agent | `--enrich` + API key + `pip install xbom[agent]` | Bulk metadata lookup + LLM classification of unknown packages |
-| 4. CodeGraph | `--enrich` + Docker + FalkorDB + npx + `pip install xbom[codegraph]` | Autonomous graph exploration to discover custom agents, tools, MCP wrappers |
+| 4. CodeGraph | `--enrich` + `--allow-build-tools` + Docker + FalkorDB + npx + `pip install xbom[codegraph]` | Autonomous graph exploration to discover custom agents, tools, MCP wrappers |
 
 Post-processing: shadow AI detection (imports not in SBOM) and risk scoring.
 
